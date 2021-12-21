@@ -75,6 +75,7 @@ TEST(MockHybridClockTest, TestMockedSystemClock) {
   HybridTime hybrid_time;
   uint64_t max_error_usec;
   clock->NowWithError(&hybrid_time, &max_error_usec);
+  // 虽然返回的是零，但实际逻辑时钟加一
   ASSERT_EQ(hybrid_time.ToUint64(), 0);
   ASSERT_EQ(max_error_usec, 0);
   // If we read the clock again we should see the logical component be incremented.
@@ -84,11 +85,13 @@ TEST(MockHybridClockTest, TestMockedSystemClock) {
   PhysicalTime time = {1234, 100 * 1000};
   mock_clock.Set(time);
   clock->NowWithError(&hybrid_time, &max_error_usec);
+  // 这里就算用一个PhysicalTime更新的话 Logical Clock应该为零
   ASSERT_EQ(hybrid_time.ToUint64(),
             HybridClock::HybridTimeFromMicrosecondsAndLogicalValue(time.time_point, 0).ToUint64());
   ASSERT_EQ(max_error_usec, time.max_error);
   // Perform another read, we should observe the logical component increment, again.
   clock->NowWithError(&hybrid_time, &max_error_usec);
+  // 物理时钟相等，走回拨逻辑，
   ASSERT_EQ(hybrid_time.ToUint64(),
             HybridClock::HybridTimeFromMicrosecondsAndLogicalValue(time.time_point, 1).ToUint64());
 }
@@ -97,6 +100,7 @@ TEST(MockHybridClockTest, TestMockedSystemClock) {
 TEST_F(HybridClockTest, TestNow_ValuesIncreaseMonotonically) {
   const HybridTime now1 = clock_->Now();
   const HybridTime now2 = clock_->Now();
+  // 每一次Now都会递增时钟，物理相同时递增逻辑
   ASSERT_LT(now1.value(), now2.value());
 }
 
@@ -147,6 +151,7 @@ void StresserThread(HybridClock* clock, AtomicBool* stop, int num_reads_per_upda
 
 // Regression test for KUDU-953: if threads are updating and polling the
 // clock concurrently, the clock should still never run backwards.
+// 测试线程同时更新和轮询时钟，时钟不应该向后运行
 TEST_F(HybridClockTest, TestClockDoesntGoBackwardsWithUpdates) {
   RunMultiThreadedTest(1);
 }

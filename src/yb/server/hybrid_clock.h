@@ -86,6 +86,7 @@ std::ostream& operator<<(std::ostream& out, const HybridClockComponents& compone
 // HybridTime should not be used on a distributed cluster running on OS X hosts,
 // since NTP clock error is not available.
 class HybridClock : public Clock {
+  // HybridClock的更新和读取应该时并发的
  public:
   HybridClock();
   explicit HybridClock(PhysicalClockPtr clock);
@@ -93,9 +94,11 @@ class HybridClock : public Clock {
 
   CHECKED_STATUS Init() override;
 
+  // 拿到一个逻辑时钟当前时间的区间，处理了单机的时钟回拨，里面error需要着重注意
   HybridTimeRange NowRange() override;
 
   // Updates the clock with a hybrid_time originating on another machine.
+  // 用一个HybridTime来更新Clock，这里只避免了logical overflow，没有考虑传入的HybridTime小于当前时钟
   void Update(const HybridTime& to_update) override;
 
   void RegisterMetrics(const scoped_refptr<MetricEntity>& metric_entity) override;
@@ -104,6 +107,7 @@ class HybridClock : public Clock {
   // error in micros. This may fail if the clock is unsynchronized or synchronized
   // but the error is too high and, since we can't do anything about it,
   // LOG(FATAL)'s in that case.
+  // 这个函数其实就是用physical clock获取物理时钟，在时钟回绕的时候做一个处理，最后再返回一个错误区间的估计值
   void NowWithError(HybridTime* hybrid_time, uint64_t* max_error_usec);
 
   // Static encoding/decoding methods for hybrid_times. Public mostly
@@ -133,9 +137,11 @@ class HybridClock : public Clock {
   // Given two hybrid times, determines whether the delta between end and begin them is higher,
   // lower or equal to the given delta and returns 1, -1 and 0 respectively. Note that if end <
   // begin we return -1.
+  // 用end - begin，看是不是比delta大，相同的情况下比较end的逻辑时钟是不是大于begin
   static int CompareHybridClocksToDelta(const HybridTime& begin, const HybridTime& end,
                                         const MonoDelta& delta);
 
+  // 最后把后面那个回调放到一个全局的map中，可以利用provider通过不同的字符串注册不同的Physical Clock
   static void RegisterProvider(std::string name, PhysicalClockProvider provider);
 
   // Enables check whether clock skew within configured bounds.

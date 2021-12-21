@@ -200,6 +200,9 @@ struct DefaultRefCountedThreadSafeTraits {
 //    private:
 //     friend class RefCountedThreadSafe<MyFoo>;
 //     ~MyFoo();
+
+// https://r00tk1ts.github.io/2020/10/22/chromium-base%E5%BA%93%E6%BA%90%E7%A0%81%E8%A7%A3%E8%AF%BB%E4%B9%8B%E5%BC%95%E7%94%A8%E8%AE%A1%E6%95%B0%E7%AF%87/
+// 上面的链接是一个对引用技术的解析，但是可以看出yugabyteDB和chorium的代码还是有一定区别
 template <class T, typename Traits = DefaultRefCountedThreadSafeTraits<T> >
 class RefCountedThreadSafe : public subtle::RefCountedThreadSafeBase {
  public:
@@ -313,6 +316,8 @@ inline void ScopedRefPtrCheck(bool) {}
 #endif
 
 
+// https://r00tk1ts.github.io/2020/10/29/chromium-base%E5%BA%93%E6%BA%90%E7%A0%81%E8%A7%A3%E8%AF%BB%E4%B9%8B%E6%99%BA%E8%83%BD%E6%8C%87%E9%92%88%E7%AF%87/
+// 对智能指针对一个源码解析
 template <class T>
 class scoped_refptr {
  public:

@@ -104,6 +104,7 @@ PhysicalClockPtr GetClock(const std::string& options) {
   }
 
   auto pos = options.find(',');
+  // {name，arg}
   auto name = pos == std::string::npos ? options : options.substr(0, pos);
   auto arg = pos == std::string::npos ? std::string() : options.substr(pos + 1);
   std::lock_guard<std::mutex> lock(providers_mutex);
@@ -117,6 +118,7 @@ PhysicalClockPtr GetClock(const std::string& options) {
 
 } // namespace
 
+// 与上面GetClock强相关
 void HybridClock::RegisterProvider(std::string name, PhysicalClockProvider provider) {
   std::lock_guard<std::mutex> lock(providers_mutex);
   providers.emplace(std::move(name), std::move(provider));
@@ -152,8 +154,10 @@ HybridTimeRange HybridClock::NowRange() {
 void HybridClock::NowWithError(HybridTime *hybrid_time, uint64_t *max_error_usec) {
   DCHECK_EQ(state_, kInitialized) << "Clock not initialized. Must call Init() first.";
 
+  // 原子的获取components
   HybridClockComponents current_components = components_.load(boost::memory_order_acquire);
 
+  // 调用初始化LogicClock时的PlysicalClock的Now接口。得到当前的时间点和错误区间
   auto now = clock_->Now();
   if (PREDICT_FALSE(!now.ok())) {
     LOG(FATAL) << Substitute("Couldn't get the current time: Clock unsynchronized. "
@@ -161,12 +165,14 @@ void HybridClock::NowWithError(HybridTime *hybrid_time, uint64_t *max_error_usec
   }
 
   // If the current time surpasses the last update just return it
+  // 如果此次获取的时间大于上一次的话直接返回，否则的话就是出现时钟回绕
   HybridClockComponents new_components = { now->time_point, 1 };
 
   VLOG(4) << __func__ << ", new: " << new_components << ", current: " << current_components;
 
   if (now->time_point < current_components.last_usec) {
     auto delta_us = current_components.last_usec - now->time_point;
+    // 如果时钟出现回拨，这里先记录日志
     if (delta_us > FLAGS_max_clock_skew_usec) {
       auto delta = MonoDelta::FromMicroseconds(delta_us);
       auto max_allowed = MonoDelta::FromMicroseconds(FLAGS_max_clock_skew_usec);
@@ -187,6 +193,7 @@ void HybridClock::NowWithError(HybridTime *hybrid_time, uint64_t *max_error_usec
   } else {
     // Loop over the check in case of concurrent updates making the CAS fail.
     while (now->time_point > current_components.last_usec) {
+      // 为什么要使用cas，直接store不可以吗，因为current_components和components肯定是一样的
       if (components_.compare_exchange_weak(current_components, new_components)) {
         *hybrid_time = HybridTimeFromMicroseconds(new_components.last_usec);
         *max_error_usec = now->max_error;
@@ -199,6 +206,7 @@ void HybridClock::NowWithError(HybridTime *hybrid_time, uint64_t *max_error_usec
     }
   }
 
+  // 下面就是处理时钟回拨的方法
   // We don't have the last time read max error since it might have originated
   // in another machine, but we can put a bound on the maximum error of the
   // hybrid_time we are providing.
@@ -216,17 +224,23 @@ void HybridClock::NowWithError(HybridTime *hybrid_time, uint64_t *max_error_usec
   // always return: last - (now - e) as the new maximum error.
   // This broadens the error interval for both cases but always returns
   // a correct error interval.
+  // last最大可能比真实时间多 last - (now - e)
 
   do {
+    // 把new_components的时间设置成上一个last的时间
     new_components.last_usec = current_components.last_usec;
+    // 相当于在时钟回绕时在上一个时间点逻辑时钟加1
     new_components.logical = current_components.logical + 1;
+    // 当逻辑时钟越界当时候直接给物理时钟加时间
     new_components.HandleLogicalComponentOverflow();
     // Loop over the check until the CAS succeeds, in case there are concurrent updates.
   } while (!components_.compare_exchange_weak(current_components, new_components));
 
+  // 求出回绕的最大时间 
   *max_error_usec = new_components.last_usec - (now->time_point - now->max_error);
 
   // We've already atomically incremented the logical, so subtract 1.
+  // 其实就是逻辑时间减1，因为这里的语义是时钟回拨时返回Returning last而且递增
   *hybrid_time = HybridTimeFromMicrosecondsAndLogicalValue(
       new_components.last_usec, new_components.logical).Decremented();
   if (PREDICT_FALSE(VLOG_IS_ON(2))) {
@@ -250,6 +264,7 @@ void HybridClock::Update(const HybridTime& to_update) {
     LOG(INFO) << __func__ << ", new: " << new_components << ", current: " << current_components;
   }
 
+  // 处理逻辑时钟overflow
   new_components.HandleLogicalComponentOverflow();
 
   // Keep trying to CAS until it works or until HT has advanced past this update.
