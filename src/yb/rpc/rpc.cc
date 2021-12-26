@@ -383,6 +383,7 @@ RpcCommandPtr Rpcs::Unregister(Handle* handle) {
   return result;
 }
 
+// 
 Rpcs::Handle Rpcs::Prepare() {
   std::lock_guard<std::mutex> lock(*mutex_);
   if (shutdown_) {

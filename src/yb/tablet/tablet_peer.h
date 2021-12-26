@@ -125,6 +125,7 @@ struct TabletOnDiskSizeInfo {
 // state machine through a consensus algorithm, which makes sure that other
 // peers see the same updates in the same order. In addition to this, this
 // class also splits the work and coordinates multi-threaded execution.
+// 下面跑的是一致性协议，这个类还拆分工作并协调多线程执行
 class TabletPeer : public consensus::ConsensusContext,
                    public TransactionParticipantContext,
                    public TransactionCoordinatorContext,

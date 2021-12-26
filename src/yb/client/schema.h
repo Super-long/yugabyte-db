@@ -341,6 +341,8 @@ class YBSchema {
   friend Schema& internal::GetSchema(YBSchema* schema);
 
   std::unique_ptr<Schema> schema_;
+  // 这个version/is_compatible_with_previous_version_是靠
+  // set_version/set_is_compatible_with_previous_version接口设置的，类内部不会修改
   uint32_t version_;
   bool is_compatible_with_previous_version_ = false;
 };

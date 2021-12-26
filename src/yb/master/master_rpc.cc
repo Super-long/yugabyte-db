@@ -184,6 +184,7 @@ void GetLeaderMasterRpc::SendRpc() {
   size_t size = addrs_.size();
   std::vector<rpc::Rpcs::Handle> handles;
   handles.reserve(size);
+  // 需要和多个地址同时通信
   {
     std::lock_guard<simple_spinlock> l(lock_);
     pending_responses_ = size;

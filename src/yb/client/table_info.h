@@ -26,14 +26,14 @@ namespace yb {
 namespace client {
 
 struct YBTableInfo {
-  YBTableName table_name;
-  std::string table_id;
-  YBSchema schema;
-  PartitionSchema partition_schema;
-  IndexMap index_map;
+  YBTableName table_name;                                       // 表名
+  std::string table_id;                                         // 表的唯一ID，用于区分同名的新旧表
+  YBSchema schema;                                              // schema相关的信息
+  PartitionSchema partition_schema;                             // 地理分区表
+  IndexMap index_map;                                           // 索引相关的信息
   boost::optional<IndexInfo> index_info;
-  YBTableType table_type;
-  bool colocated;
+  YBTableType table_type;                                       // 表类型相关 PG/redis/cTRANSACTION_STATUS_TABLE_TYPE
+  bool colocated;                                               // 并置表相关的信息
   boost::optional<master::ReplicationInfoPB> replication_info;
 };
 

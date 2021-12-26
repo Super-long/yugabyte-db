@@ -121,6 +121,7 @@ YB_DEFINE_ENUM(TabletDirType, (kData)(kWal));
 // TODO: will also be responsible for keeping the local metadata about
 // which tablets are hosted on this server persistent on disk, as well
 // as re-opening all the tablets at startup, etc.
+// 在tablet server side对所有对tablets做一些track
 class TSTabletManager : public tserver::TabletPeerLookupIf, public tablet::TabletSplitter {
  public:
   typedef std::vector<std::shared_ptr<tablet::TabletPeer>> TabletPeers;
@@ -137,6 +138,7 @@ class TSTabletManager : public tserver::TabletPeerLookupIf, public tablet::Table
   // Load all tablet metadata blocks from disk, and open their respective tablets.
   // Upon return of this method all existing tablets are registered, but
   // the bootstrap is performed asynchronously.
+  // 从磁盘拉起所有的tablet，注意引导程序是异步的
   CHECKED_STATUS Init();
   CHECKED_STATUS Start();
 
@@ -144,6 +146,7 @@ class TSTabletManager : public tserver::TabletPeerLookupIf, public tablet::Table
   // Returns Status::OK if all tablets bootstrapped successfully. If
   // the bootstrap of any tablet failed returns the failure reason for
   // the first tablet whose bootstrap failed.
+  // 前面说了引导是异步的，调用此函数需要等待所有的引导程序完成
   CHECKED_STATUS WaitForAllBootstrapsToFinish();
 
   // Starts shutdown process.
@@ -203,6 +206,7 @@ class TSTabletManager : public tserver::TabletPeerLookupIf, public tablet::Table
                             std::shared_ptr<tablet::TabletPeer>* tablet_peer) const
       REQUIRES_SHARED(mutex_);
 
+  // 和LookupTablet有啥区别
   CHECKED_STATUS GetTabletPeer(
       const TabletId& tablet_id,
       std::shared_ptr<tablet::TabletPeer>* tablet_peer) const override;
@@ -230,6 +234,7 @@ class TSTabletManager : public tserver::TabletPeerLookupIf, public tablet::Table
   //
   // This is thread-safe to call along with tablet modification, but not safe
   // to call from multiple threads at the same time.
+  // 用于生成一个tablet的修改报告，使用完以后需要调用MarkTabletReportAcknowledged清楚增量状态
   void GenerateTabletReport(master::TabletReportPB* report, bool include_bootstrap = true);
 
   // Start a full tablet report and reset any incremental state tracking.

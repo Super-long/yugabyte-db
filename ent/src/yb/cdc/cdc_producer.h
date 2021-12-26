@@ -46,6 +46,7 @@ struct StreamMetadata {
   }
 };
 
+// 把op_id之后的数据填充到resp中
 CHECKED_STATUS GetChanges(const std::string& stream_id,
                           const std::string& tablet_id,
                           const OpId& op_id,

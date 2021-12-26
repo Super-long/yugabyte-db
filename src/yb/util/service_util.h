@@ -46,6 +46,7 @@
     } \
   } while (false)
 
+// 检查失败则返回指定的错误状态和给定的信息
 #define RPC_CHECK_AND_RETURN_ERROR(expr, s, error, code, context) \
   RPC_CHECK_OP_AND_RETURN_ERROR(expr, ==, true, s, error, code, context)
 #define RPC_CHECK_EQ_AND_RETURN_ERROR(var1, var2, s, error, code, context) \

@@ -1397,6 +1397,7 @@ Result<CDCStreamId> YBClient::CreateCDCStream(
   req.set_initial_state(active ? master::SysCDCStreamEntryPB::ACTIVE
                                : master::SysCDCStreamEntryPB::INITIATED);
 
+  // 发起SyncLeaderMasterRpc，在服务端RPC看起来就是简单的加一
   CreateCDCStreamResponsePB resp;
   CALL_SYNC_LEADER_MASTER_RPC(req, resp, CreateCDCStream);
   return resp.stream_id();

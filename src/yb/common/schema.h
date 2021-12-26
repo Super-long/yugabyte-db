@@ -285,6 +285,7 @@ class ColumnSchema {
   bool is_static_;
   bool is_counter_;
   int32_t order_;
+  // 这几种排序的类型以前没想过
   SortingType sorting_type_;
 };
 
@@ -456,13 +457,14 @@ class TableProperties {
 // The schema for a set of rows.
 //
 // A Schema is simply a set of columns, along with information about
-// which prefix of columns makes up the primary key.
+// which prefix of columns makes up the primary key. 这里主键的列前缀信息是啥
 //
 // Note that, while Schema is copyable and assignable, it is a complex
 // object that is not inexpensive to copy. You should generally prefer
 // passing by pointer or reference, and functions that create new
 // Schemas should generally prefer taking a Schema pointer and using
 // Schema::swap() or Schema::Reset() rather than returning by value.
+// schema这个对象还是比较昂贵的，所以趋向于使用指针而不是对象本身
 class Schema {
  public:
 
@@ -1056,6 +1058,7 @@ class Schema {
       size_t,
       std::hash<GStringPiece>,
       std::equal_to<GStringPiece>,
+      // 这里配备了一个计数分配器
       NameToIndexMapAllocator> NameToIndexMap;
   NameToIndexMap name_to_index_;
 

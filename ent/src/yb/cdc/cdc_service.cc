@@ -126,7 +126,7 @@ using client::internal::RemoteTabletServer;
 
 constexpr int kMaxDurationForTabletLookup = 50;
 const client::YBTableName kCdcStateTableName(
-    YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);
+    YQL_DATABASE_CQL, master::kSystemNamespaceName, master::kCdcStateTableName);  // cdc_state
 
 CDCServiceImpl::CDCServiceImpl(TSTabletManager* tablet_manager,
                                const scoped_refptr<MetricEntity>& metric_entity_server,
@@ -167,6 +167,7 @@ bool IsTabletPeerLeader(const std::shared_ptr<tablet::TabletPeer>& peer) {
 }
 } // namespace
 
+// 看代码其实就是两个作用，一个是trace，一个是检查下tablet_manager是否是有效的
 template <class ReqType, class RespType>
 bool CDCServiceImpl::CheckOnline(const ReqType* req, RespType* resp, rpc::RpcContext* rpc) {
   TRACE("Received RPC $0: $1", rpc->ToString(), req->DebugString());
@@ -180,6 +181,35 @@ bool CDCServiceImpl::CheckOnline(const ReqType* req, RespType* resp, rpc::RpcCon
   return true;
 }
 
+/*
+message CreateCDCStreamRequestPB {
+  // Table to set up CDC on.
+  optional string table_id = 1;
+  optional CDCRecordType record_type = 2 [default = CHANGE];
+  optional CDCRecordFormat record_format = 3 [default = JSON];
+}
+
+message CreateCDCStreamResponsePB {
+  optional CDCErrorPB error = 1;
+  optional bytes stream_id = 2;
+}
+
+enum CDCRecordType {
+  CHANGE = 1;
+  AFTER = 2;
+  ALL = 3;
+}
+
+enum CDCRecordFormat {
+  JSON = 1;
+  WAL = 2; // Used for 2DC.
+}
+*/
+/*
+ * 1. 先通过table_id拿到一个Table的元数据，然后过滤掉CDC不支持的表类型
+ * 2. 从client通过request中的数据请求一个stream_id，这里会请求master，所以所有节点都可以接受这个请求吗？
+ * 3. 加到cache中, <stream_id, StreamMetadata>
+ */
 void CDCServiceImpl::CreateCDCStream(const CreateCDCStreamRequestPB* req,
                                      CreateCDCStreamResponsePB* resp,
                                      RpcContext context) {
@@ -198,6 +228,7 @@ void CDCServiceImpl::CreateCDCStream(const CreateCDCStreamRequestPB* req,
   RPC_STATUS_RETURN_ERROR(s, resp->mutable_error(), CDCErrorPB::TABLE_NOT_FOUND, context);
 
   // We don't allow CDC on YEDIS and tables without a primary key.
+  // 下面的判断就是判断这两个条件
   if (req->record_format() != CDCRecordFormat::WAL) {
     RPC_CHECK_NE_AND_RETURN_ERROR(table->table_type(), client::YBTableType::REDIS_TABLE_TYPE,
                                   STATUS(InvalidArgument, "Cannot setup CDC on YEDIS_TABLE"),
@@ -217,9 +248,11 @@ void CDCServiceImpl::CreateCDCStream(const CreateCDCStreamRequestPB* req,
 
   std::unordered_map<std::string, std::string> options;
   options.reserve(2);
+  // 定义在pb里面，通过枚举变量返回字符串
   options.emplace(kRecordType, CDCRecordType_Name(req->record_type()));
   options.emplace(kRecordFormat, CDCRecordFormat_Name(req->record_format()));
 
+  // 这一步获取了一个stream_id，有一个发起RPC的开销
   auto result = async_client_init_->client()->CreateCDCStream(req->table_id(), options);
   RPC_CHECK_AND_RETURN_ERROR(result.ok(), result.status(), resp->mutable_error(),
                              CDCErrorPB::INTERNAL_ERROR, context);
@@ -322,6 +355,16 @@ Result<google::protobuf::RepeatedPtrField<master::TabletLocationsPB>> CDCService
   return tablets;
 }
 
+/*
+ * 1. 从tablet_manger中获取tablet的一组peer
+ * 2. 判断leader是否正在提供服务 
+ * 3. 为session设置deadline
+ * 4. 调用GetStream中从op_id处开始提取更新
+ * 5. 再判断现在是否leader正在提供服务
+ * 6. 调用UpdateCheckpoint更新checkpoint，需要更新一个系统表，里面有一个cache,chache的更新频率是有时间限制的
+ * 7. 调用GetCDCTabletMetrics做某些metric相关的工作
+ * 有一个疑问，CDC是表级别的，但是表可能分布在不同的table_t中，此时如何同步
+ */
 void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
                                 GetChangesResponsePB* resp,
                                 RpcContext context) {
@@ -343,16 +386,19 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
 
   // Check that requested tablet_id is part of the CDC stream.
   ProducerTabletInfo producer_tablet = {"" /* UUID */, req->stream_id(), req->tablet_id()};
+  // 判断请求中的stream中是否存在table_t,
   Status s = CheckTabletValidForStream(producer_tablet);
   RPC_STATUS_RETURN_ERROR(s, resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
 
   std::shared_ptr<tablet::TabletPeer> tablet_peer;
+  // 获取tablet的一组peer节点
   s = tablet_manager_->GetTabletPeer(req->tablet_id(), &tablet_peer);
   auto original_leader_term = tablet_peer ? tablet_peer->LeaderTerm() : OpId::kUnknownTerm;
 
   // If we we can't serve this tablet...
+  // 在LEADER未就绪的时候也不能够服务
   if (s.IsNotFound() || tablet_peer->LeaderStatus() != consensus::LeaderStatus::LEADER_AND_READY) {
-    if (req->serve_as_proxy()) {
+    if (req->serve_as_proxy()) {  // 这是啥意思
       // Forward GetChanges() to tablet leader. This commonly happens in Kubernetes setups.
       auto context_ptr = std::make_shared<RpcContext>(std::move(context));
       TabletLeaderGetChanges(req, resp, context_ptr, tablet_peer);
@@ -383,6 +429,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
   session->SetDeadline(deadline);
   OpId op_id;
 
+  // 从op_id这一点开始读取数据
   if (req->has_from_checkpoint()) {
     op_id = OpId::FromPB(req->from_checkpoint().op_id());
   } else {
@@ -392,6 +439,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
     op_id = *result;
   }
 
+  // 返回的只是个StreamMetadata，其中有stream的类型
   auto record = GetStream(req->stream_id());
   RPC_CHECK_AND_RETURN_ERROR(record.ok(), record.status(), resp->mutable_error(),
                              CDCErrorPB::INTERNAL_ERROR, context);
@@ -409,7 +457,8 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
       STATUS(TimedOut, "Too close to rpc timeout to call GetChanges."),
       resp->mutable_error(),
       CDCErrorPB::INTERNAL_ERROR, context);
-
+·
+    // lzlTODO：这里的deadline后面有时间看一看
     // Calculate a safe deadline so that CdcProducer::GetChanges times out
     // 20% faster than CdcServiceImpl::GetChanges. This gives enough
     // time (unless timeouts are unrealistically small) for CdcServiceImpl::GetChanges
@@ -420,6 +469,8 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
   }
 
   // Read the latest changes from the Log.
+  // 最重要的部分，在stream中的tablet的op_id开始取数据，类型在record中，把结果放在resp中
+  // 这里蕴含这table_t级别的数据，因为请求的table_t可能不在本机器啊，如何解决？
   s = cdc::GetChanges(
       req->stream_id(), req->tablet_id(), op_id, *record->get(), tablet_peer, mem_tracker,
       &msgs_holder, resp, &last_readable_index, get_changes_deadline);
@@ -430,6 +481,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
       context);
 
   // Verify leadership was maintained for the duration of the GetChanges() read.
+  // 再检查一遍目前leader是否存在，一个经典的乐观操作
   s = tablet_manager_->GetTabletPeer(req->tablet_id(), &tablet_peer);
   if (s.IsNotFound() || tablet_peer->LeaderStatus() != consensus::LeaderStatus::LEADER_AND_READY ||
       tablet_peer->LeaderTerm() != original_leader_term) {
@@ -441,13 +493,16 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
 
   // Store information about the last server read & remote client ACK.
   uint64_t last_record_hybrid_time = resp->records_size() > 0 ?
-      resp->records(resp->records_size() - 1).time() : 0;
+      resp->records(resp->records_size() - 1).time() : 0;    // 最后一项record的时间，重要的是看下这个时间怎么得出来的
 
+  // 调用UpdateCheckpoint更新checkpoint，需要更新一个系统表，里面有一个cache,chache的更新频率是有时间限制的
   s = UpdateCheckpoint(producer_tablet, OpId::FromPB(resp->checkpoint().op_id()), op_id, session,
                        last_record_hybrid_time);
+
   RPC_STATUS_RETURN_ERROR(s, resp->mutable_error(), CDCErrorPB::INTERNAL_ERROR, context);
 
   {
+    // 所以这里到底干了啥
     std::shared_ptr<consensus::Consensus> shared_consensus = tablet_peer->shared_consensus();
 
     RPC_CHECK_NE_AND_RETURN_ERROR(shared_consensus, nullptr,
@@ -460,6 +515,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
   }
 
   // Update relevant GetChanges metrics before handing off the Response.
+  // 其实这个 tablet_metric 已经时所属表元数据的一部分了，这里对metric做一个更新
   auto tablet_metric = GetCDCTabletMetrics(producer_tablet, tablet_peer);
   if (tablet_metric) {
     auto lid = resp->checkpoint().op_id();
@@ -643,7 +699,9 @@ bool CDCServiceImpl::CDCEnabled() {
   return cdc_enabled_.load(std::memory_order_acquire);
 }
 
+// 
 Result<std::shared_ptr<yb::client::TableHandle>> CDCServiceImpl::GetCdcStateTable() {
+  // 看起来state table可以cache
   bool use_cache = GetAtomicFlag(&FLAGS_enable_cdc_state_table_caching);
   {
     SharedLock<decltype(mutex_)> l(mutex_);
@@ -991,12 +1049,15 @@ void CDCServiceImpl::GetCheckpoint(const GetCheckpointRequestPB* req,
 
   // Check that requested tablet_id is part of the CDC stream.
   ProducerTabletInfo producer_tablet = {"" /* UUID */, req->stream_id(), req->tablet_id()};
+  // 检查ProducerTabletInfo中的stream_id/tablet在本机是否匹配
   s = CheckTabletValidForStream(producer_tablet);
+  // s如果是false的话直接返回错误了
   RPC_STATUS_RETURN_ERROR(s, resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
 
   auto session = async_client_init_->client()->NewSession();
   CoarseTimePoint deadline = context.GetClientDeadline();
   if (deadline == CoarseTimePoint::max()) { // Not specified by user.
+    // 使用墙上时钟获取时间
     deadline = CoarseMonoClock::now() + async_client_init_->client()->default_rpc_timeout();
   }
   session->SetDeadline(deadline);
@@ -1274,6 +1335,7 @@ Result<OpId> CDCServiceImpl::GetLastCheckpoint(
     SharedLock<decltype(mutex_)> l(mutex_);
     auto it = tablet_checkpoints_.find(producer_tablet);
     if (it != tablet_checkpoints_.end()) {
+      // 在缓存中查找匹配stream_id / tablet_id
       // Use checkpoint from cache only if it is current.
       if (it->cdc_state_checkpoint.op_id.index > 0 &&
           CoarseMonoClock::Now() - it->cdc_state_checkpoint.last_update_time <=
@@ -1311,9 +1373,11 @@ Result<OpId> CDCServiceImpl::GetLastCheckpoint(
   return OpId::FromString(row_block->row(0).column(0).string_value());
 }
 
+// 用新的op_id更新CheckPoint，里面state table的概念需要再看看
+// 涉及到混合逻辑时钟
 Status CDCServiceImpl::UpdateCheckpoint(const ProducerTabletInfo& producer_tablet,
-                                        const OpId& sent_op_id,
-                                        const OpId& commit_op_id,
+                                        const OpId& sent_op_id,   // 客户发送来的op_id
+                                        const OpId& commit_op_id, // 我们返回给用户的op_id
                                         const std::shared_ptr<client::YBSession>& session,
                                         uint64_t last_record_hybrid_time) {
   bool update_cdc_state = true;
@@ -1332,10 +1396,12 @@ Status CDCServiceImpl::UpdateCheckpoint(const ProducerTabletInfo& producer_table
       }
 
       // Check if we need to update cdc_state table.
+      // 多长时间应该更新一次state table
       if (now - it->cdc_state_checkpoint.last_update_time <=
           (FLAGS_cdc_state_checkpoint_update_interval_ms * 1ms)) {
         update_cdc_state = false;
       } else {
+        // 注意这里我们使用墙上时钟来更新
         it->cdc_state_checkpoint.last_update_time = now;
       }
     } else {
@@ -1344,20 +1410,25 @@ Status CDCServiceImpl::UpdateCheckpoint(const ProducerTabletInfo& producer_table
   }
 
   if (update_cdc_state) {
+    // 把kCdcStateTableName对应的表加载到TableHandle中来
     auto res = GetCdcStateTable();
     RETURN_NOT_OK(res);
+    // 生成一个写操作
     const auto op = (*res)->NewUpdateOp();
     auto* const req = op->mutable_request();
     DCHECK(!producer_tablet.stream_id.empty() && !producer_tablet.tablet_id.empty());
+
+    // 给这个操作加入一些值:{tablet_id, stream_id, op_id, 时钟}
     QLAddStringHashValue(req, producer_tablet.tablet_id);
     QLAddStringRangeValue(req, producer_tablet.stream_id);
     (*res)->AddStringColumnValue(req, master::kCdcCheckpoint, commit_op_id.ToString());
     // If we have a last record hybrid time, use that for physical time. If not, it means we're
     // caught up, so the current time.
     uint64_t last_replication_time_micros = last_record_hybrid_time != 0 ?
-        HybridTime(last_record_hybrid_time).GetPhysicalValueMicros() : GetCurrentTimeMicros();
+        HybridTime(last_record_hybrid_time).GetPhysicalValueMicros() : GetCurrentTimeMicros();  // 这个就是获取walltime，在walltime.h中
     (*res)->AddTimestampColumnValue(req, master::kCdcLastReplicationTime,
                                                 last_replication_time_micros);
+    // 在ApplyAndFlush中应用这个操作
     RETURN_NOT_OK(RefreshCacheOnFail(session->ApplyAndFlush(op)));
   }
 
@@ -1402,6 +1473,7 @@ std::shared_ptr<CDCTabletMetrics> CDCServiceImpl::GetCDCTabletMetrics(
 
   std::string key = "CDCMetrics::" + producer.stream_id;
   std::shared_ptr<void> metrics_raw = tablet->GetAdditionalMetadata(key);
+  // 在不存在这个元数据时添加进去
   if (metrics_raw == nullptr) {
     //  Create a new METRIC_ENTITY_cdc here.
     MetricEntity::AttributeMap attrs;
@@ -1416,9 +1488,11 @@ std::shared_ptr<CDCTabletMetrics> CDCServiceImpl::GetCDCTabletMetrics(
     auto entity = METRIC_ENTITY_cdc.Instantiate(metric_registry_, producer.MetricsString(), attrs);
     metrics_raw = std::make_shared<CDCTabletMetrics>(entity);
     // Adding the new metric to the tablet so it maintains the same lifetime scope.
+    // 给tablet添加额外的元数据
     tablet->AddAdditionalMetadata(key, metrics_raw);
   }
 
+  // 表格元数据的一部分
   return std::static_pointer_cast<CDCTabletMetrics>(metrics_raw);
 }
 
@@ -1591,21 +1665,27 @@ MemTrackerPtr CDCServiceImpl::GetMemTracker(
   return it->mem_tracker;
 }
 
+// 检查这个stream_id现在本机是否识别，不识别的话补充stream_id对应的tablet
+// 有一个小问题，就是按照现在的加载方案，可能对应的tablet的数据不在本机器，这样如果取到CDC
 Status CDCServiceImpl::CheckTabletValidForStream(const ProducerTabletInfo& info) {
   {
     SharedLock<rw_spinlock> l(mutex_);
+    // 先检查这个TabletInfo是否存在checkpoint checkpoint
     if (tablet_checkpoints_.count(info) != 0) {
       return Status::OK();
     }
+    // stream_id已经存在了，但是由上面的判断得出这个stream不存在指定的tablet
     const auto& stream_index = tablet_checkpoints_.get<StreamTag>();
     if (stream_index.find(info.stream_id) != stream_index.end()) {
       // Did not find matching tablet ID.
+      // TODO：日志打的很奇怪
       return STATUS_FORMAT(InvalidArgument, "Tablet ID $0 is not part of stream ID $1",
                            info.tablet_id, info.stream_id);
     }
   }
 
   // If we don't recognize the stream_id, populate our full tablet list for this stream.
+  // tablet_checkpoints_不存在，也就是无法识别这个stream的话为其补充Tablet列表
   auto tablets = VERIFY_RESULT(GetTablets(info.stream_id));
   bool found = false;
   {

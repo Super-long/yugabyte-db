@@ -75,6 +75,7 @@ class TableHandle {
 
   CHECKED_STATUS Reopen();
 
+  // 请求分为不同的requestPB
   std::shared_ptr<YBqlWriteOp> NewWriteOp(QLWriteRequestPB::QLStmtType type) const;
 
   std::shared_ptr<YBqlWriteOp> NewInsertOp() const {
@@ -146,8 +147,9 @@ class TableHandle {
 
   YBClient* client_;
   YBTablePtr table_;
-  ColumnIdsMap column_ids_;
-  ColumnTypesMap column_types_;
+  // 下面的数据虽然在table中已经有了，但是是在vector中的，这里放到hashmap里面
+  ColumnIdsMap column_ids_;     // col的name对应colID
+  ColumnTypesMap column_types_; // colId对应的类型
 };
 
 typedef std::function<void(const TableHandle&, QLConditionPB*)> TableFilter;

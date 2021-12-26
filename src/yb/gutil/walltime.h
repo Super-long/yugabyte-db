@@ -87,6 +87,7 @@ typedef int64 MicrosecondsInt64;
 void GetThreadUserAndSysCpuTimeMicros(MicrosecondsInt64 *user, MicrosecondsInt64 *sys);
 
 namespace walltime_internal {
+// 看起来mac获取时间的函数还和其他的系统不太一样
 
 #if defined(__APPLE__)
 

@@ -76,24 +76,31 @@ class CDCServiceImpl : public CDCServiceIf {
 
   ~CDCServiceImpl();
 
+  // 其中的重要成员其实是async_client_init_，基本每一个函数都需要通过async_client_init_发起一次RPC
+  // 创建一个CDCstream
   void CreateCDCStream(const CreateCDCStreamRequestPB* req,
                        CreateCDCStreamResponsePB* resp,
                        rpc::RpcContext rpc) override;
+  // 删除一个CDCstream
   void DeleteCDCStream(const DeleteCDCStreamRequestPB *req,
                        DeleteCDCStreamResponsePB* resp,
                        rpc::RpcContext rpc) override;
+  // 获取stream代表的table的所有tablets
   void ListTablets(const ListTabletsRequestPB *req,
                    ListTabletsResponsePB* resp,
                    rpc::RpcContext rpc) override;
+  // 订阅者将使用这个 API 来获取最新的更改集
   void GetChanges(const GetChangesRequestPB* req,
                   GetChangesResponsePB* resp,
                   rpc::RpcContext rpc) override;
+  // 
   void GetCheckpoint(const GetCheckpointRequestPB* req,
                      GetCheckpointResponsePB* resp,
                      rpc::RpcContext rpc) override;
 
   // Update peers in other tablet servers about the latest minimum applied cdc index for a specific
   // tablet.
+  // 用req.replicated_index来更新replicate
   void UpdateCdcReplicatedIndex(const UpdateCdcReplicatedIndexRequestPB* req,
                                 UpdateCdcReplicatedIndexResponsePB* resp,
                                 rpc::RpcContext rpc) override;
@@ -219,6 +226,7 @@ class CDCServiceImpl : public CDCServiceIf {
 
     // Checkpoint stored in cdc_state table. This is the checkpoint that CDC consumer sends to CDC
     // producer as the last checkpoint that it has successfully applied.
+    // 存储着 CDC 消费者发送给 CDC 生产者的checkpoint，作为它已成功应用的最后一个checkpoint
     mutable TabletCheckpoint cdc_state_checkpoint;
     // Last checkpoint sent to CDC consumer. This will always be more than cdc_state_checkpoint.
     mutable TabletCheckpoint sent_checkpoint;

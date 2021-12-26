@@ -65,6 +65,7 @@ Status TableHandle::Create(const YBTableName& table_name,
   return Open(table_name, client);
 }
 
+// 感觉TableHandle open以后唯一的好处就是可以快速的索引{column_name -> column_id}{column_id -> type}
 Status TableHandle::Open(const YBTableName& table_name, YBClient* client) {
   RETURN_NOT_OK(client->OpenTable(table_name, &table_));
 

@@ -93,6 +93,7 @@ bool CDCPoller::CheckOnline() {
   return cdc_consumer_ != nullptr;
 }
 
+// 当没和其他节点连接时认为是offline状态
 #define RETURN_WHEN_OFFLINE() \
   if (!CheckOnline()) { \
     LOG_WITH_PREFIX_UNLOCKED(WARNING) << "CDC Poller went offline"; \
@@ -113,7 +114,9 @@ void CDCPoller::DoPoll() {
 
   // determine if we should delay our upcoming poll
   int64_t delay = FLAGS_async_replication_polling_delay_ms; // normal throttling.
+  // max_idle_wait 是poll退回到空闲间隔而不是立即重试之前，连续空 GetChanges 的最大数量
   if (idle_polls_ >= FLAGS_async_replication_max_idle_wait) {
+    // 当我们目的地没有数据时，poll之间的等待时间
     delay = std::max(delay, (int64_t)FLAGS_async_replication_idle_delay_ms); // idle backoff.
   }
   if (poll_failures_ > 0) {
@@ -130,6 +133,7 @@ void CDCPoller::DoPoll() {
 
   cdc::CDCCheckpointPB checkpoint;
   *checkpoint.mutable_op_id() = op_id_;
+  // 如果我们不知道checkpoint的话，server会使用cdc_state中的checkpoint
   if (checkpoint.op_id().index() > 0 || checkpoint.op_id().term() > 0) {
     // Only send non-zero checkpoints in request.
     // If we don't know the latest checkpoint, then CDC producer can use the checkpoint from
@@ -150,6 +154,7 @@ void CDCPoller::DoPoll() {
       nullptr, /* RemoteTablet: will get this from 'req' */
       producer_client_->client.get(),
       &req,
+      // 在RPC请求成功之后会执行HandlePoll
       [=](const Status &status, cdc::GetChangesResponsePB &&new_resp) {
         auto retained = rpcs->Unregister(&poll_handle_);
         auto resp = std::make_shared<cdc::GetChangesResponsePB>(std::move(new_resp));
@@ -160,6 +165,7 @@ void CDCPoller::DoPoll() {
   (**poll_handle_).SendRpc();
 }
 
+// 处理一些失败，然后把更改交给OutputClient
 void CDCPoller::HandlePoll(yb::Status status,
                            std::shared_ptr<cdc::GetChangesResponsePB> resp) {
   RETURN_WHEN_OFFLINE();
@@ -175,15 +181,16 @@ void CDCPoller::HandlePoll(yb::Status status,
   resp_ = resp;
 
   bool failed = false;
+  // RPC请求失败
   if (!status_.ok()) {
     LOG_WITH_PREFIX_UNLOCKED(INFO) << "CDCPoller failure: " << status_.ToString();
     failed = true;
-  } else if (resp_->has_error()) {
+  } else if (resp_->has_error()) { // 请求成功，处理失败
     LOG_WITH_PREFIX_UNLOCKED(WARNING) << "CDCPoller failure response: code="
                                       << resp_->error().code()
                                       << ", status=" << resp->error().status().DebugString();
     failed = true;
-  } else if (!resp_->has_checkpoint()) {
+  } else if (!resp_->has_checkpoint()) {  // 没有checkpoint？
     LOG_WITH_PREFIX_UNLOCKED(ERROR) << "CDCPoller failure: no checkpoint";
     failed = true;
   }

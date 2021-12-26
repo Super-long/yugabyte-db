@@ -144,12 +144,18 @@ class TwoDCOutputClient : public cdc::CDCOutputClient {
 
 Status TwoDCOutputClient::ApplyChanges(const cdc::GetChangesResponsePB* poller_resp) {
   // ApplyChanges is called in a single threaded manner.
+  // 以单线程的方式被调用
   // For all the changes in GetChangesResponsePB, we first fan out and find the tablet for
   // every record key.
   // Then we apply the records in the same order in which we received them.
   // Once all changes have been applied (successfully or not), we invoke the callback which will
   // then either poll for next set of changes (in case of successful application) or will try to
   // re-apply.
+  /*
+   * 1. 对于所有的 GetChangesResponsePB 中的更改首先找到每一个Record对应的key对应的tablet
+   * 2. 按照接受记录的顺序应用这些记录
+   * 3. 一旦应用了所有更改（成功与否），我们将调用回调，该回调将轮询下一组更改（在成功应用的情况下）或尝试重新应用。
+   */
   DCHECK(poller_resp->has_checkpoint());
   twodc_resp_copy_.Clear();
 

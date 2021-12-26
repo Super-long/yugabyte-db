@@ -91,6 +91,7 @@ YB_STRONGLY_TYPED_BOOL(RetryWhenBusy);
 // Provides utilities for retrying failed RPCs.
 //
 // All RPCs should use HandleResponse() to retry certain generic errors.
+// 一个通用的重试RPC程序
 class RpcRetrier {
  public:
   RpcRetrier(CoarseTimePoint deadline, Messenger* messenger, ProxyCache *proxy_cache);
@@ -233,6 +234,8 @@ class Rpcs {
   explicit Rpcs(std::mutex* mutex = nullptr);
   ~Rpcs() { Shutdown(); }
 
+  // 执行前面的元素被添加或删除的时候迭代器和引用不会失效，且支持随机访问
+  // https://www.boost.org/doc/libs/1_78_0/doc/html/container/non_standard_containers.html#container.non_standard_containers.stable_vector
   typedef boost::container::stable_vector<rpc::RpcCommandPtr> Calls;
   typedef Calls::iterator Handle;
 

@@ -137,6 +137,7 @@ message CDCTabletPB {
 }
 
 message CDCCheckpointPB {
+  // cdc 订阅者需要传入一个from_checkpoint它成功消费的最后一个 op_id
   optional OpIdPB op_id = 1;
 }
 

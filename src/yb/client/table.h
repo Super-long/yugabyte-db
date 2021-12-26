@@ -78,6 +78,7 @@ class YBTable : public std::enable_shared_from_this<YBTable> {
   // Return the table's ID. This is an internal identifier which uniquely
   // identifies a table. If the table is deleted and recreated with the same
   // name, the ID will distinguish the old table from the new.
+  // 区分同一个名字的新表和旧表
   const std::string& id() const;
 
   const YBSchema& schema() const;
@@ -89,6 +90,7 @@ class YBTable : public std::enable_shared_from_this<YBTable> {
   // Note that table partitions are mutable could change at any time because of tablet splitting.
   // So it is not safe to rely on following Get*Partition* functions to return information that
   // is consistent across subsequent calls.
+  // 依赖于GetPartitionsShared保持tablet分区的一致信息是不安全的
   std::shared_ptr<const TablePartitionList> GetPartitionsShared() const;
   VersionedTablePartitionListPtr GetVersionedPartitions() const;
   TablePartitionList GetPartitionsCopy() const;
@@ -107,6 +109,7 @@ class YBTable : public std::enable_shared_from_this<YBTable> {
   const IndexInfo& index_info() const;
 
   // Is the table colocated?
+  // 这个表是否是并置表：https://docs.yugabyte.com/latest/architecture/docdb-sharding/colocated-tables/
   bool colocated() const;
 
   // Returns the replication info for the table.

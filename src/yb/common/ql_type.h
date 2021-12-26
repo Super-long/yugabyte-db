@@ -66,6 +66,7 @@ class UDTypeInfo {
   std::vector<std::string> field_names_ = {};
 };
 
+// 等到创建这个对象的时候再看看
 class QLType {
  public:
   typedef std::shared_ptr<QLType> SharedPtr;
