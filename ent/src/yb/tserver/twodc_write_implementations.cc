@@ -103,9 +103,12 @@ CHECKED_STATUS CombineExternalIntents(
   return Status::OK();
 }
 
+// 把一个record放到write_batch内部
 CHECKED_STATUS AddRecord(
     const cdc::CDCRecordPB& record,
+    // 所以这些数据要被写入docdb了吗
     docdb::KeyValueWriteBatchPB* write_batch) {
+  // 为什么操作是APPLY的时候连kvpair都不需要添加
   if (record.operation() == cdc::CDCRecordPB::APPLY) {
     auto* apply_txn = write_batch->mutable_apply_external_transactions()->Add();
     apply_txn->set_transaction_id(record.transaction_state().transaction_id());
@@ -138,6 +141,8 @@ CHECKED_STATUS AddRecord(
 // is cdc_max_apply_batch_size_kb. Batches are not sent by opid order, since a GetChangesResponse
 // can contain interleaved records to multiple tablets. Rather, we send batches to each tablet
 // in order for that tablet, before moving on to the next tablet.
+// 这个类就是为了把多个records放到一个WriteRequestPB中
+// 其中那个map是<table_id, deque<WriteRequst>>
 class BatchedWriteImplementation : public TwoDCWriteInterface {
   ~BatchedWriteImplementation() = default;
 
@@ -146,6 +151,7 @@ class BatchedWriteImplementation : public TwoDCWriteInterface {
     auto it = records_.find(tablet_id);
     if (it == records_.end()) {
       std::deque<std::unique_ptr<WriteRequestPB>> queue;
+      // 找到不存在的tablet就放到map中来
       records_.emplace(tablet_id, std::move(queue));
     }
 
@@ -157,19 +163,23 @@ class BatchedWriteImplementation : public TwoDCWriteInterface {
         FLAGS_cdc_max_apply_batch_size_bytes : FLAGS_consensus_max_batch_size_bytes;
 
     if (queue.empty() ||
+      // 一个 WriteRequestPB 中的请求数量和大小都是有限的
         queue.back()->write_batch().write_pairs_size() >= max_batch_records ||
         queue.back()->ByteSize() >= max_batch_size) {
-      // Create a new batch.
+      // 创建一个新的batch
       auto req = std::make_unique<WriteRequestPB>();
       req->set_tablet_id(tablet_id);
+      // 用最后一个插入的record的时间设置WriteRequestPB
       req->set_external_hybrid_time(record.time());
       queue.push_back(std::move(req));
     }
     write_request = queue.back().get();
 
+    // 这里只是把请求放到了这些deque中
     return AddRecord(record, write_request->mutable_write_batch());
   }
 
+  // 永远获取
   std::unique_ptr <WriteRequestPB> GetNextWriteRequest() override {
     if (records_.empty()) {
       return nullptr;

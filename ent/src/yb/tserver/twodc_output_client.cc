@@ -179,6 +179,7 @@ Status TwoDCOutputClient::ApplyChanges(const cdc::GetChangesResponsePB* poller_r
 
   // Ensure we have a connection to the consumer table cached.
   if (!table_) {
+    // 获取consumer表中的所有tablet
     Status s = local_client_->client->OpenTable(consumer_tablet_info_.table_id, &table_);
     if (!s.ok()) {
       HandleError(s, true);
@@ -190,16 +191,19 @@ Status TwoDCOutputClient::ApplyChanges(const cdc::GetChangesResponsePB* poller_r
   auto timeout_ms = MonoDelta::FromMilliseconds(FLAGS_cdc_read_rpc_timeout_ms);
   // Using this future as a barrier to get all the tablets before processing.  Ordered iteration
   // matters: we need to ensure that each record is handled sequentially.
+  // 使用这个future在执行前获取table_所有的tablets，有序的处理每一条record非常重要
   auto all_tablets_result = local_client_->client->LookupAllTabletsFuture(
       table_, CoarseMonoClock::now() + timeout_ms).get();
   for (int i = 0; i < twodc_resp_copy_.records_size(); i++) {
     // All KV-pairs within a single CDC record will be for the same row.
     // key(0).key() will contain the hash code for that row. We use this to lookup the tablet.
-    if (UseLocalTserver()) {
+    if (UseLocalTserver()) {  // 是否使用本地TServer而且没有强制使用remote TServer
       TabletLookupCallbackFastTrack(i);
     } else {
+      // records类型是 google::protobuf::RepeatedPtrField< ::yb::cdc::CDCRecordPB >*
       const auto& record = twodc_resp_copy_.records(i);
       if (record.operation() == cdc::CDCRecordPB::APPLY) {
+        // 把record做一个batch的缓存
         TabletRangeLookupCallback(i, record.partition().partition_key_start(),
                                   record.partition().partition_key_end(), all_tablets_result);
       } else {
@@ -223,12 +227,14 @@ bool TwoDCOutputClient::UseLocalTserver() {
   return use_local_tserver_ && !FLAGS_cdc_force_remote_tserver;
 }
 
+// 传入的是包含在record中partition[start,end]中的tablet
 void TwoDCOutputClient::ProcessRecord(const std::vector<std::string>& tablet_ids,
                                       const cdc::CDCRecordPB& record) {
   std::unique_ptr<WriteRequestPB> write_request;
   {
     std::lock_guard<decltype(lock_)> l(lock_);
     for (const auto& tablet_id : tablet_ids) {
+      // 做了一个batch write，里面只是在缓存，下面 SendNextCDCWriteToTablet 会把多个record封装在一个write_request
       auto status = write_strategy_->ProcessRecord(tablet_id, record);
       if (!status.ok()) {
         error_status_ = status;
@@ -245,6 +251,7 @@ void TwoDCOutputClient::ProcessRecord(const std::vector<std::string>& tablet_ids
   // Found tablets for all records, now we should write the records.
   if (write_request) {
     // Apply the writes on consumer.
+    // 如果我们的writeRequest Cache存在的话就发送一个请求，每次processRecord都会查看是否存在write_quest，所以基本不存在堆积的可能性
     SendNextCDCWriteToTablet(std::move(write_request));
   } else {
     // No write_request on error. Respond, without applying records.
@@ -259,6 +266,7 @@ void TwoDCOutputClient::TabletLookupCallback(
   ProcessRecord({tablet->get()->tablet_id()}, twodc_resp_copy_.records(record_idx));
 }
 
+// 
 void TwoDCOutputClient::TabletRangeLookupCallback(
     const size_t record_idx,
     const std::string partition_key_start,
@@ -266,16 +274,19 @@ void TwoDCOutputClient::TabletRangeLookupCallback(
     const Result<std::vector<client::internal::RemoteTabletPtr>>& tablets) {
   INCREMENT_AND_RETURN_IF_ERROR_RESULT(tablets);
 
+  // tablets是table对应的全部tablet，通过record的partition做一个过滤，因为有些partition不希望在某些地区应用
   auto filtered_tablets_result = client::FilterTabletsByHashPartitionKeyRange(
       *tablets, partition_key_start, partition_key_end);
   INCREMENT_AND_RETURN_IF_ERROR_RESULT(filtered_tablets_result);
 
   auto filtered_tablets = *filtered_tablets_result;
   auto tablet_ids = std::vector<std::string>(filtered_tablets.size());
+  // 把满足上面条件的tablet_id放到vector中
   std::transform(filtered_tablets.begin(), filtered_tablets.end(), tablet_ids.begin(),
                  [&](const auto& tablet_ptr) {
     return tablet_ptr->tablet_id();
   });
+  // 传入的参数是这个record的partition对应的tablet_ID和Record本身
   ProcessRecord(tablet_ids, twodc_resp_copy_.records(record_idx));
 }
 
@@ -283,6 +294,7 @@ void TwoDCOutputClient::TabletLookupCallbackFastTrack(const size_t record_idx) {
   ProcessRecord({consumer_tablet_info_.tablet_id}, twodc_resp_copy_.records(record_idx));
 }
 
+// 可以看到我们现在是一个一个发送的
 void TwoDCOutputClient::SendNextCDCWriteToTablet(std::unique_ptr<WriteRequestPB> write_request) {
   // TODO: This should be parallelized for better performance with M:N setups.
   auto deadline = CoarseMonoClock::Now() +
@@ -291,6 +303,9 @@ void TwoDCOutputClient::SendNextCDCWriteToTablet(std::unique_ptr<WriteRequestPB>
   write_handle_ = rpcs_->Prepare();
   if (write_handle_ != rpcs_->InvalidHandle()) {
     // Send in nullptr for RemoteTablet since cdc rpc now gets the tablet_id from the write request.
+    // 多个属于一个tablet的record在一个writeRequest中
+    // 猜一手，此时拿到这写change record数据以后需要发送给所有订阅过的tablet
+    // 创建一个CDCWriteRpc
     *write_handle_ = CreateCDCWriteRpc(
         deadline,
         nullptr /* RemoteTablet */,
@@ -309,6 +324,7 @@ void TwoDCOutputClient::WriteCDCRecordDone(const Status& status, const WriteResp
   rpc::RpcCommandPtr retained = nullptr;
   {
     std::lock_guard<decltype(lock_)> l(lock_);
+    // 把这个请求卸载掉
     retained = rpcs_->Unregister(&write_handle_);
   }
   if (!status.ok()) {
@@ -318,12 +334,14 @@ void TwoDCOutputClient::WriteCDCRecordDone(const Status& status, const WriteResp
     HandleError(StatusFromPB(response.error().status()), true /* done */);
     return;
   }
+  // 成功应用一次写入以后递增计数器
   cdc_consumer_->IncrementNumSuccessfulWriteRpcs();
 
   // See if we need to handle any more writes.
   std::unique_ptr <WriteRequestPB> write_request;
   {
     std::lock_guard<decltype(lock_)> l(lock_);
+    // 看缓存中是否还存在能record
     write_request = write_strategy_->GetNextWriteRequest();
   }
 

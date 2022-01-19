@@ -74,6 +74,9 @@ struct ReadContext;
 
 YB_STRONGLY_TYPED_BOOL(AllowSplitTablet);
 
+// 最终所有的更改还是发送到这里来了
+// 对应的rpc proto文件是tserver_service.proto
+// 参数的proto文件是tserver.proto
 class TabletServiceImpl : public TabletServerServiceIf {
  public:
   typedef std::vector<tablet::TabletPeerPtr> TabletPeers;

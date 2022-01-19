@@ -38,6 +38,7 @@ message KeyValueWriteBatchPB {
   optional bool DEPRECATED_may_have_metadata = 3;
   // Used by serializable isolation transactions and row locking statements to store read intents.
   // In case of read-modify-write operation both read_pairs and write_pairs could present.
+  // 由可序列化的隔离事务和行锁定语句用于存储read intent。 在读取-修改-写入操作的情况下，read_pairs 和 write_pairs 都可能出现。
   repeated KeyValuePairPB read_pairs = 5;
   // Even though there can be multiple write_pairs we have only one row_mark_type/ wait_policy since
   // currently we don't batch read RPCs from YSQL (which are the only ones that can set these 2

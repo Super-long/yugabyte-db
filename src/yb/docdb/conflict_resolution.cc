@@ -1018,6 +1018,7 @@ void ResolveOperationConflicts(const DocOperations& doc_ops,
                                Counter* conflicts_metric,
                                ResolutionCallback callback) {
   TRACE("ResolveOperationConflicts");
+  // resolution_ht：进行此操作时的时间是多少
   auto context = std::make_unique<OperationConflictResolverContext>(&doc_ops, resolution_ht,
                                                                     conflicts_metric);
   auto resolver = std::make_shared<ConflictResolver>(

@@ -1129,17 +1129,20 @@ Status Tablet::ApplyOperation(
     const Operation& operation, int64_t batch_idx,
     const docdb::KeyValueWriteBatchPB& write_batch,
     AlreadyAppliedToRegularDB already_applied_to_regular_db) {
+  // 这个拿到的就是创建writebatch的时间戳[twodc_write_implementations.cc AddRecord中记录了这一操作]用的是最后一个record的时间
   auto hybrid_time = operation.WriteHybridTime();
 
+  // 其实就是两个ConsensusFrontier
   docdb::ConsensusFrontiers frontiers;
   // Even if we have an external hybrid time, use the local commit hybrid time in the consensus
-  // frontier.
+  // frontier. 即使我们有external hybrid time，在 consensus frontier 使用本地提交混合时间。
   auto frontiers_ptr =
       InitFrontiers(operation.op_id(), operation.hybrid_time(), &frontiers);
   if (frontiers_ptr) {
     auto ttl = write_batch.has_ttl()
         ? MonoDelta::FromNanoseconds(write_batch.ttl())
         : docdb::Value::kMaxTtl;
+        // 这里是operation中的时间戳加上ttl
     frontiers_ptr->Largest().set_max_value_level_ttl_expiration_time(
         docdb::FileExpirationFromValueTTL(operation.hybrid_time(), ttl));
   }

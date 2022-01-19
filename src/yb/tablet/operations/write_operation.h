@@ -230,6 +230,7 @@ class WriteOperation : public OperationBase<OperationType::kWrite, tserver::Writ
 
   // True if we know that this operation is on a transactional table so make sure we go through the
   // transactional codepath.
+  // 还是没理解
   bool force_txn_path_ = false;
 
   const int64_t term_;

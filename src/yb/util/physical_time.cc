@@ -36,6 +36,7 @@ TAG_FLAG(disable_clock_sync_error, advanced);
 TAG_FLAG(max_clock_sync_error_usec, advanced);
 TAG_FLAG(max_clock_sync_error_usec, runtime);
 
+// 这个值是直接给出来的
 DEFINE_uint64(max_clock_skew_usec, 500 * 1000,
               "Transaction read clock skew in usec. "
               "This is the maximum allowed time delta between servers of a single cluster.");
@@ -45,6 +46,7 @@ namespace yb {
 namespace {
 
 Result<PhysicalTime> CheckClockSyncError(PhysicalTime time) {
+  // 时钟偏移过大的时候会记录日志
   if (!FLAGS_disable_clock_sync_error && time.max_error > FLAGS_max_clock_sync_error_usec) {
     return STATUS_FORMAT(ServiceUnavailable, "Error: Clock error was too high ($0 us), max "
                                              "allowed ($1 us).", time.max_error,

@@ -148,6 +148,7 @@ HybridTimeRange HybridClock::NowRange() {
   NowWithError(&now, &error);
   auto max_global_now = HybridTimeFromMicroseconds(
       clock_->MaxGlobalTime({now.GetPhysicalValueMicros(), error}));
+  // 返回一个当前可能的时间区间，并不准确
   return std::make_pair(now, max_global_now);
 }
 
@@ -165,7 +166,7 @@ void HybridClock::NowWithError(HybridTime *hybrid_time, uint64_t *max_error_usec
   }
 
   // If the current time surpasses the last update just return it
-  // 如果此次获取的时间大于上一次的话直接返回，否则的话就是出现时钟回绕
+  // 如果此次获取的时间大于上一次的话直接返回，否则的话就是出现时钟回，这里也是为防止了其他节点的时间过快，更新了本地时钟的问题
   HybridClockComponents new_components = { now->time_point, 1 };
 
   VLOG(4) << __func__ << ", new: " << new_components << ", current: " << current_components;
@@ -268,7 +269,7 @@ void HybridClock::Update(const HybridTime& to_update) {
   new_components.HandleLogicalComponentOverflow();
 
   // Keep trying to CAS until it works or until HT has advanced past this update.
-  while (current_components < new_components &&
+  while (current_components < new_components && // 注意，这里放传入的时钟小于current的时候会直接退出
       !components_.compare_exchange_weak(current_components, new_components)) {}
 }
 
@@ -316,7 +317,8 @@ void HybridClockComponents::HandleLogicalComponentOverflow() {
     }
     YB_LOG_EVERY_N_SECS(WARNING, 5) << "Logical component overflow: "
         << "last_usec=" << last_usec << ", logical=" << logical;
-
+    
+    // 逻辑时钟超限制的时候
     last_usec += logical >> HybridTime::kBitsForLogicalComponent;
     logical &= HybridTime::kLogicalBitMask;
   }

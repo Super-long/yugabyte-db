@@ -632,6 +632,7 @@ void TabletPeer::WriteAsync(std::unique_ptr<WriteOperation> operation) {
     return;
   }
 
+  // 这一步在干啥 
   operation->set_preparing_token(std::move(preparing_token));
   tablet_->AcquireLocksAndPerformDocOperations(std::move(operation));
 }

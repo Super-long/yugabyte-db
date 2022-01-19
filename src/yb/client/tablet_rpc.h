@@ -71,6 +71,7 @@ class TabletInvoker {
  public:
   // If table is specified, TabletInvoker can detect that table partitions are stale in case tablet
   // is no longer available and return ClientErrorCode::kTablePartitionListIsStale.
+  // 如果指定了 table，TabletInvoker 可以检测 table 分区是否过时，以防 tablet 不再可用并返回 ClientErrorCode::kTablePartitionListIsStale。
   explicit TabletInvoker(const bool local_tserver_only,
                          const bool consistent_prefix,
                          YBClient* client,
@@ -85,6 +86,7 @@ class TabletInvoker {
 
   virtual ~TabletInvoker();
 
+  // 主要的检查逻辑在这里，具体的发送逻辑在rpc_->SendRpcToTserver
   void Execute(const std::string& tablet_id, bool leader_only = false);
 
   // Returns true when whole operation is finished, false otherwise.

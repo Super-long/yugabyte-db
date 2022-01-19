@@ -386,7 +386,7 @@ void CDCServiceImpl::GetChanges(const GetChangesRequestPB* req,
 
   // Check that requested tablet_id is part of the CDC stream.
   ProducerTabletInfo producer_tablet = {"" /* UUID */, req->stream_id(), req->tablet_id()};
-  // 判断请求中的stream中是否存在table_t,
+  // 判断请求中的stream中是否存在table_t,如果不存在的话把stream所属的tablet都拉到本地
   Status s = CheckTabletValidForStream(producer_tablet);
   RPC_STATUS_RETURN_ERROR(s, resp->mutable_error(), CDCErrorPB::INVALID_REQUEST, context);
 
@@ -1376,8 +1376,8 @@ Result<OpId> CDCServiceImpl::GetLastCheckpoint(
 // 用新的op_id更新CheckPoint，里面state table的概念需要再看看
 // 涉及到混合逻辑时钟
 Status CDCServiceImpl::UpdateCheckpoint(const ProducerTabletInfo& producer_tablet,
-                                        const OpId& sent_op_id,   // 客户发送来的op_id
-                                        const OpId& commit_op_id, // 我们返回给用户的op_id
+                                        const OpId& sent_op_id,   // 发送给客户的起始op_id
+                                        const OpId& commit_op_id, // 返回给用户的最后op_id
                                         const std::shared_ptr<client::YBSession>& session,
                                         uint64_t last_record_hybrid_time) {
   bool update_cdc_state = true;

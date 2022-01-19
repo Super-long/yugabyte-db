@@ -164,6 +164,7 @@ class HybridClock : public Clock {
   // Used to get the current error, for metrics.
   int64_t SkewForMetrics();
 
+  // 暂时看起来用的是WallClockImpl
   PhysicalClockPtr clock_;
   boost::atomic<HybridClockComponents> components_{HybridClockComponents(0, 0)};
   State state_ = kNotInitialized;

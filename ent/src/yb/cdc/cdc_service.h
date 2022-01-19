@@ -222,11 +222,21 @@ class CDCServiceImpl : public CDCServiceIf {
   // These are guarded by lock_.
   // Map of checkpoints that have been sent to CDC consumer and stored in cdc_state.
   struct TabletCheckpointInfo {
+    /*
+     * std::string universe_uuid;  needed on Consumer side for uniqueness. Empty on Producer.
+     * std::string stream_id; unique ID on Producer, but not on Consumer.
+     * std::string tablet_id;
+     */
     ProducerTabletInfo producer_tablet_info;
 
     // Checkpoint stored in cdc_state table. This is the checkpoint that CDC consumer sends to CDC
     // producer as the last checkpoint that it has successfully applied.
     // 存储着 CDC 消费者发送给 CDC 生产者的checkpoint，作为它已成功应用的最后一个checkpoint
+    /*
+     * OpId op_id;
+     * // Timestamp at which the op ID was last updated.
+     * CoarseTimePoint last_update_time;
+     */
     mutable TabletCheckpoint cdc_state_checkpoint;
     // Last checkpoint sent to CDC consumer. This will always be more than cdc_state_checkpoint.
     mutable TabletCheckpoint sent_checkpoint;
@@ -254,6 +264,7 @@ class CDCServiceImpl : public CDCServiceIf {
   class StreamTag;
 
   typedef boost::multi_index_container <
+    // 这个multi_index的意思是以producer_tablet_info排序
     TabletCheckpointInfo,
     boost::multi_index::indexed_by <
       boost::multi_index::hashed_unique <

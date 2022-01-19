@@ -121,6 +121,7 @@ YB_DEFINE_ENUM(TabletDirType, (kData)(kWal));
 // TODO: will also be responsible for keeping the local metadata about
 // which tablets are hosted on this server persistent on disk, as well
 // as re-opening all the tablets at startup, etc.
+// 还将负责将有关此服务器上托管的tablet的本地元数据持久保存在磁盘上，以及在启动时重新打开所有tablet等。
 // 在tablet server side对所有对tablets做一些track
 class TSTabletManager : public tserver::TabletPeerLookupIf, public tablet::TabletSplitter {
  public:

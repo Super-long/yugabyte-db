@@ -170,6 +170,7 @@ message WriteRequestPB {
   // A batch of redis operations.
   repeated RedisWriteRequestPB redis_write_batch = 8;
 
+  // ql请求是什么。
   // A batch of QL operations.
   repeated QLWriteRequestPB ql_write_batch = 10;
 

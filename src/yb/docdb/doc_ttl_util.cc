@@ -77,7 +77,7 @@ const HybridTime FileExpirationFromValueTTL(
   }
   auto exp_time = server::HybridClock::AddPhysicalTimeToHybridTime(key_hybrid_time, value_ttl);
   // Sanity check for overflow, return no expiration if detected.
-  if (server::HybridClock::CompareHybridClocksToDelta(
+  if (server::HybridClock::CompareHybridClocksToDelta( // 判断是否越界的
       key_hybrid_time, exp_time, value_ttl) != 0) {
     return kNoExpiration;
   }

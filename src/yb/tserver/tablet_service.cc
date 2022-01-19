@@ -1604,6 +1604,7 @@ bool EmptyWriteBatch(const docdb::KeyValueWriteBatchPB& write_batch) {
 void TabletServiceImpl::Write(const WriteRequestPB* req,
                               WriteResponsePB* resp,
                               rpc::RpcContext context) {
+  // 读写操作直接返回空，这个操作有点迷
   if (FLAGS_TEST_tserver_noop_read_write) {
     for (int i = 0; i < req->ql_write_batch_size(); ++i) {
       resp->add_ql_response_batch();
@@ -1615,8 +1616,13 @@ void TabletServiceImpl::Write(const WriteRequestPB* req,
   TRACE_EVENT1("tserver", "TabletServiceImpl::Write",
                "tablet_id", req->tablet_id());
   VLOG(2) << "Received Write RPC: " << req->DebugString();
+
+  // 重点！！ 利用请求中的时间戳更新本地时钟 clock.h中
   UpdateClock(*req, server_->Clock());
 
+  // 通过tablet_peer_lookup拿到发送请求的tablet_id的tablet实体
+  // 包含了tablet和其tabletpeer
+  // 当消息发送到这里到时候，是先认为这个tablet可以处理数据才发送来的,找到leader tablet
   auto tablet = LookupLeaderTabletOrRespond(
       server_->tablet_peer_lookup(), req->tablet_id(), resp, &context);
   if (!tablet ||
@@ -1625,6 +1631,7 @@ void TabletServiceImpl::Write(const WriteRequestPB* req,
     return;
   }
 
+  // 不知道这个hidden是什么意思
   if (tablet.peer->tablet()->metadata()->hidden()) {
     auto status = STATUS(NotFound, "Tablet not found", req->tablet_id());
     SetupErrorAndRespond(
@@ -1669,11 +1676,14 @@ void TabletServiceImpl::Write(const WriteRequestPB* req,
     return;
   }
 
+  // 此请求是否存在数据；CDC不但非空，且拥有external_hybrid_time
   bool has_operations = req->ql_write_batch_size() != 0 ||
                         req->redis_write_batch_size() != 0 ||
                         req->pgsql_write_batch_size() != 0 ||
-                        (req->has_external_hybrid_time() && !EmptyWriteBatch(req->write_batch()));
+                        (req->has_external_hybrid_time() && !EmptyWriteBatch(req->write_batch()));  // CDC相关
+
   if (!has_operations && tablet.peer->tablet()->table_type() != TableType::REDIS_TABLE_TYPE) {
+    // 看起来redis允许空请求，这是为什么？空请求我们提前推出，不需要走raft日志
     // An empty request. This is fine, can just exit early with ok status instead of working hard.
     // This doesn't need to go to Raft log.
     MakeRpcOperationCompletionCallback<WriteResponsePB>(
@@ -1682,6 +1692,7 @@ void TabletServiceImpl::Write(const WriteRequestPB* req,
   }
 
   // For postgres requests check that the syscatalog version matches.
+  // 这里所谓的 syscatalog 是什么意思？
   if (tablet.peer->tablet()->table_type() == TableType::PGSQL_TABLE_TYPE) {
     uint64_t last_breaking_catalog_version = 0; // unset.
     for (const auto& pg_req : req->pgsql_write_batch()) {
@@ -1708,6 +1719,7 @@ void TabletServiceImpl::Write(const WriteRequestPB* req,
   *operation->AllocateRequest() = *req;
 
   auto context_ptr = std::make_shared<RpcContext>(std::move(context));
+  // 这个参数好奇怪，尽然设定了请求的错误比例
   if (RandomActWithProbability(GetAtomicFlag(&FLAGS_TEST_respond_write_failed_probability))) {
     LOG(INFO) << "Responding with a failure to " << req->DebugString();
     operation->set_completion_callback(nullptr);
@@ -1718,6 +1730,7 @@ void TabletServiceImpl::Write(const WriteRequestPB* req,
         tablet.peer, context_ptr, resp, operation.get(), server_->Clock(), req->include_trace()));
   }
 
+  // 操作与 YSQL system catalog tables 有关必须是事务性的
   AdjustYsqlOperationTransactionality(
       req->pgsql_write_batch_size(), tablet.peer.get(), operation.get());
 

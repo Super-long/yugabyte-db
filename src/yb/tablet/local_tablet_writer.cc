@@ -73,6 +73,7 @@ void LocalTabletWriter::Submit(std::unique_ptr<Operation> operation, int64_t ter
   auto state = down_cast<WriteOperation*>(operation.get());
   OpId op_id(term, Singleton<AutoIncrementingCounter>::get()->GetAndIncrement());
 
+  // 给这个事务分配的时间戳
   auto hybrid_time = tablet_->mvcc_manager()->AddLeaderPending(op_id);
   state->set_hybrid_time(hybrid_time);
 

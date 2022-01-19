@@ -157,6 +157,7 @@ void WriteOperation::DoStartSynchronization(const Status& status) {
   ScopedRWOperation submit_token(std::move(submit_token_));
   // If a restart read is required, then we return this fact to caller and don't perform the write
   // operation.
+  // 重新读取被需要的话需要取消写入并向调用者通知，但是restart_read_ht_什么时候被设置，作用是什么？
   if (restart_read_ht_.is_valid()) {
     auto restart_time = response()->mutable_restart_read_time();
     restart_time->set_read_ht(restart_read_ht_.ToUint64());

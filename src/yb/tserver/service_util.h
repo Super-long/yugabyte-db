@@ -209,6 +209,7 @@ struct LeaderTabletPeer {
 
 // The "peer" argument could be provided by the caller in case the caller has already performed
 // the LookupTabletPeerOrRespond call, and we only need to fill the leader term.
+// “peer”参数可以由调用者提供，以防调用者已经执行了 LookupTabletPeerOrRespond 调用，我们只需要填充leader term.
 template<class RespClass>
 LeaderTabletPeer LookupLeaderTabletOrRespond(
     TabletPeerLookupIf* tablet_manager,
