@@ -601,6 +601,7 @@ class TabletOperations {
                const InternalMetrics& metrics_internal) {
     auto type = operation->type();
     if (type == OperationType::kLocal) {
+      // 命令的类型为kLocal的话只需要本地执行就可以了
       ProcessLocalOperation(context, arena, operation, metrics_internal);
       return;
     }
@@ -849,6 +850,7 @@ class BatchContextImpl : public BatchContext {
   }
 
   void CleanYBTableFromCache() override {
+    // 从tabels_cache中根据dbname删除一个table
     impl_data_->CleanYBTableFromCacheForDB(db_name_);
   }
 
@@ -864,14 +866,17 @@ class BatchContextImpl : public BatchContext {
     Commit(1);
   }
 
+  // 看起来执行所有在operations_积攒的命令
   void Commit(int retries) {
     if (operations_.empty()) {
       return;
     }
 
+  // 获取接下来命令要操作的DB实例
     auto table = impl_data_->GetYBTableForDB(db_name_);
     if (!table.ok()) {
       for (auto& operation : operations_) {
+        // DB不存在，直接报错
         operation.Respond(table.status());
       }
     }
@@ -879,7 +884,9 @@ class BatchContextImpl : public BatchContext {
     lookups_left_.store(operations_.size(), std::memory_order_release);
     retry_lookups_.store(false, std::memory_order_release);
     for (auto& operation : operations_) {
+      // 看起来像是查找[table partition] -> tablet的过程
       impl_data_->client_->LookupTabletByKey(
+          // 使用client执行去执行这个redis转化过的操作,执行完以后执行LookupDone
           table.get(), operation.partition_key(), deadline,
           std::bind(
               &BatchContextImpl::LookupDone, scoped_refptr<BatchContextImpl>(this), &operation,
@@ -921,13 +928,16 @@ class BatchContextImpl : public BatchContext {
     if (PREDICT_FALSE(operations_.back().responded())) {
       operations_.pop_back();
     } else {
+      // 计算每个请求中消耗
       consumption_.Add(operations_.back().space_used_by_request());
     }
   }
 
   void LookupDone(
       Operation* operation, int retries, const Result<client::internal::RemoteTabletPtr>& result) {
+    // 在redis实际操作结束以后调用
     const int kMaxRetries = 2;
+    // 把执行操作的结果放到operation中
     if (!result.ok()) {
       auto status = result.status();
       if (status.IsNotFound() && retries < kMaxRetries) {
@@ -951,10 +961,12 @@ class BatchContextImpl : public BatchContext {
     BatchContextPtr self(this);
     for (auto& operation : operations_) {
       if (!operation.responded()) {
+        // 拿到操作对应的tablet信息
         auto it = tablets_.find(operation.tablet()->tablet_id());
         if (it == tablets_.end()) {
           it = tablets_.emplace(operation.tablet()->tablet_id(), TabletOperations(&arena_)).first;
         }
+        // 执行在operation中的全部redis请求
         it->second.Process(self, &arena_, &operation, impl_data_->metrics_internal_);
       }
     }
@@ -1019,10 +1031,13 @@ class RedisServiceImpl::Impl {
     return true;
   }
 
+  // 检查是否已经鉴权过了
   bool CheckAuthentication(RedisConnectionContext* conn_context) {
+    // 因为密码可能是其他tablet上设置的，这里检查到没有设置auth的时候需要去拉取密码
     if (!conn_context->is_authenticated()) {
       vector<string> passwords;
       Status s = data_.GetRedisPasswords(&passwords);
+      // 不允许auth的话就当已经鉴权过了
       conn_context->set_authenticated(!FLAGS_enable_redis_auth || (s.ok() && passwords.empty()));
     }
     return conn_context->is_authenticated();
@@ -1046,8 +1061,10 @@ RedisServiceImplData::RedisServiceImplData(RedisServer* server, string&& yb_tier
 yb::Result<std::shared_ptr<client::YBTable>> RedisServiceImplData::GetYBTableForDB(
     const string& db_name) {
   std::shared_ptr<client::YBTable> table;
+  // 用db_name拼接出一个YB上的name
   YBTableName table_name = GetYBTableNameForRedisDatabase(db_name);
   bool was_cached = false;
+  // tablecache 中如果没找到的话
   auto res = tables_cache_->GetTable(table_name, &table, &was_cached);
   if (!res.ok()) return res;
   return table;
@@ -1373,14 +1390,17 @@ Status RedisServiceImplData::GetRedisPasswords(vector<string>* passwords) {
   MonoTime now = MonoTime::Now();
 
   std::lock_guard<std::mutex> lock(redis_password_mutex_);
+  // 如果密码存在有效时长，且目前有效，直接返回
   if (redis_cached_password_validity_expiry_.Initialized() &&
       now < redis_cached_password_validity_expiry_) {
     *passwords = redis_cached_passwords_;
     return Status::OK();
   }
 
+  // 从master里看看能不能把数据拿到，拿不到就返回错误
   RETURN_NOT_OK(client_->GetRedisPasswords(&redis_cached_passwords_));
   *passwords = redis_cached_passwords_;
+  // 密码有效时长默认是开启的
   redis_cached_password_validity_expiry_ =
       now + MonoDelta::FromMilliseconds(FLAGS_redis_password_caching_duration_ms);
   return Status::OK();
@@ -1438,6 +1458,7 @@ bool AllowedInClientMode(const RedisCommandInfo* info, RedisClientMode mode) {
   }
 }
 
+// 用于接受redis的命令
 void RedisServiceImpl::Impl::Handle(rpc::InboundCallPtr call_ptr) {
   auto call = std::static_pointer_cast<RedisInboundCall>(call_ptr);
 
@@ -1467,7 +1488,8 @@ void RedisServiceImpl::Impl::Handle(rpc::InboundCallPtr call_ptr) {
   // We process them as follows:
   // Each read commands are processed individually.
   // Sequential write commands use single session and the same batcher.
-  const auto& batch = call->client_batch();
+  // 一系列batch命令被传进来，读命令单独执行，一系列写命令使用单个session执行
+  const auto& batch = call->client_batch(); // 这里获取到一系列类型为slice的clientcommand
   auto conn = call->connection();
   const string remote = yb::ToString(conn->remote());
   RedisConnectionContext* conn_context = &(call->connection_context());
@@ -1476,6 +1498,7 @@ void RedisServiceImpl::Impl::Handle(rpc::InboundCallPtr call_ptr) {
   for (size_t idx = 0; idx != batch.size(); ++idx) {
     const RedisClientCommand& c = batch[idx];
 
+    // 获取命令本身的信息，这里命令的填充也是很有意思的
     auto cmd_info = FetchHandler(c);
 
     // Handle the current redis command.
@@ -1483,6 +1506,7 @@ void RedisServiceImpl::Impl::Handle(rpc::InboundCallPtr call_ptr) {
       RespondWithFailure(call, idx, "Unsupported call.");
       continue;
     } else if (!AllowedInClientMode(cmd_info, conn_context->ClientMode())) {
+      // 默认的mode是KNormal
       RespondWithFailure(
           call, idx, Substitute(
                          "Command $0 not allowed in client mode $1.", cmd_info->name,
@@ -1490,6 +1514,7 @@ void RedisServiceImpl::Impl::Handle(rpc::InboundCallPtr call_ptr) {
       continue;
     }
 
+    // 需要参数的是多少，正数就是这么多，负数至少这么多
     size_t arity = static_cast<size_t>(std::abs(cmd_info->arity) - 1);
     bool exact_count = cmd_info->arity > 0;
     size_t passed_arguments = c.size() - 1;
@@ -1500,14 +1525,16 @@ void RedisServiceImpl::Impl::Handle(rpc::InboundCallPtr call_ptr) {
           << " At least " << arity << " expected, but " << passed_arguments << " found.";
       RespondWithFailure(call, idx, "Too few arguments.");
     } else if (exact_count && passed_arguments != arity) {
+      // 参数不匹配
       // X (> 0) means that the command needs exactly X arguments.
       YB_LOG_EVERY_N_SECS(ERROR, 60)
           << "Requested command " << c[0] << " has wrong number of arguments. "
           << arity << " expected, but " << passed_arguments << " found.";
       RespondWithFailure(call, idx, "Wrong number of arguments.");
-    } else if (!CheckArgumentSizeOK(c)) {
+    } else if (!CheckArgumentSizeOK(c)) { // 检查参数的数量是否超限
       RespondWithFailure(call, idx, "Redis argument too long.");
     } else if (!CheckAuthentication(conn_context) && cmd_info->name != "auth") {
+      // 检查是否允许auth，不允许且出现auth就是错误的
       RespondWithFailure(call, idx, "Authentication required.", "NOAUTH");
     } else {
       if (cmd_info->name != "config" && cmd_info->name != "monitor") {
@@ -1515,10 +1542,11 @@ void RedisServiceImpl::Impl::Handle(rpc::InboundCallPtr call_ptr) {
       }
 
       // Handle the call.
+      // 执行redis命令,这里其实实际在redis_cpmmands.cc的 Command 命令，也就是对RedisCommandInfo做一个解析以后放到operations_中
       cmd_info->functor(*cmd_info, idx, context.get());
 
       if (cmd_info->name == "select" && db_name != conn_context->redis_db_to_use()) {
-        // update context.
+        // update context. 发现此次命令是select的时候，把context中积攒的命令全部执行掉
         context->Commit();
         db_name = conn_context->redis_db_to_use();
         context = make_scoped_refptr<BatchContextImpl>(db_name, call, &data_);

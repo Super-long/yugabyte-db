@@ -320,9 +320,10 @@ size_t FindPartitionStartIndex(const TablePartitionList& partitions,
                          (it - partitions.begin()) / group_by * group_by;
 }
 
+// 在partitionlist中找到距传入的partitionkey所属的partition
 PartitionKeyPtr FindPartitionStart(
     const VersionedTablePartitionListPtr& versioned_partitions, const PartitionKey& partition_key,
-    size_t group_by) {
+    size_t group_by) /*group by 默认为1*/ {
   const auto idx = FindPartitionStartIndex(versioned_partitions->keys, partition_key, group_by);
   return PartitionKeyPtr(versioned_partitions, &versioned_partitions->keys[idx]);
 }

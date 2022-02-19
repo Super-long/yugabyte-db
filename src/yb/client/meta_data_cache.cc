@@ -102,6 +102,7 @@ Status YBMetaDataCache::GetTable(const TableId& table_id,
     }
   }
 
+  // 缓存中没找到的话就会发起两次远程过程调用去获取表相关的信息
   RETURN_NOT_OK(client_->OpenTable(table_id, table));
   {
     std::lock_guard<std::mutex> lock(cached_tables_mutex_);

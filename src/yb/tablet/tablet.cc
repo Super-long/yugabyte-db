@@ -1317,6 +1317,7 @@ void SetupKeyValueBatch(WriteRequestPB* write_request, WriteRequestPB* batch_req
 
 //--------------------------------------------------------------------------------------------------
 // Redis Request Processing.
+// 把redis 命令转化为docops并执行
 void Tablet::KeyValueBatchFromRedisWriteBatch(std::unique_ptr<WriteOperation> operation) {
   auto scoped_read_operation = CreateNonAbortableScopedRWOperation();
   if (!scoped_read_operation.ok()) {
@@ -1348,6 +1349,7 @@ void Tablet::KeyValueBatchFromRedisWriteBatch(std::unique_ptr<WriteOperation> op
       response->add_redis_response_batch()->Swap(&redis_write_operation->response());
     }
 
+    // 实际执行操作的写入
     WriteOperation::StartSynchronization(std::move(operation), Status::OK());
   });
 }
@@ -1984,6 +1986,7 @@ void Tablet::KeyValueBatchFromPgsqlWriteBatch(std::unique_ptr<WriteOperation> op
 
 //--------------------------------------------------------------------------------------------------
 
+// 可以看到这里根据opreation中操作的类型去执行不同的操作，但大体是不同的语句转换为docops
 void Tablet::AcquireLocksAndPerformDocOperations(std::unique_ptr<WriteOperation> operation) {
   TRACE(__func__);
   if (table_type_ == TableType::TRANSACTION_STATUS_TABLE_TYPE) {

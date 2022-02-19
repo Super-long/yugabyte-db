@@ -207,6 +207,7 @@ void Command(
 
   auto op = std::make_shared<Op>(table);
   const auto& command = context->command(idx);
+  // 对操作做一个解析，把command的信息解析到op.get
   Status s = parser(op.get(), command);
   if (!s.ok()) {
     RespondWithFailure(context->call(), idx, s.message().ToBuffer());
@@ -216,6 +217,7 @@ void Command(
 }
 
 #define READ_COMMAND(cname) \
+    // 第三个参数是解析的函数
     Command<yb::client::YBRedisReadOp>(info, idx, &BOOST_PP_CAT(Parse, cname), context)
 #define WRITE_COMMAND(cname) \
     Command<yb::client::YBRedisWriteOp>(info, idx, &BOOST_PP_CAT(Parse, cname), context)
@@ -235,6 +237,7 @@ void Command(
         nullptr, \
         YB_REDIS_METRIC(name).Instantiate(metric_entity), \
     };\
+    // 下面这四个参数构造了一个RedisCommandInfo结构，然后调用SetupMethod
     setup_method({BOOST_PP_STRINGIZE(name), functor, arity, std::move(metrics)}); \
   } \
   /**/
@@ -1021,6 +1024,7 @@ void HandleConfig(LocalCommandData data) {
   vector<string> passwords =
       yb::StringSplit(data.arg(3).ToBuffer(), FLAGS_redis_passwords_separator[0]);
   Status status;
+  // 每个用户密码最多有两个
   if (passwords.size() > 2) {
     status = STATUS(InvalidArgument, "Only maximum of 2 passwords are supported");
   } else if (FLAGS_use_hashed_redis_password) {
@@ -1053,6 +1057,7 @@ void HandleAuth(LocalCommandData data) {
   vector<string> passwords;
   auto status = data.context()->service_data()->GetRedisPasswords(&passwords);
   RedisResponsePB resp;
+  // 不存在密码或者密码验证错误的话直接返回错误
   if (!status.ok() || !AcceptPassword(passwords, data.arg(1).ToBuffer())) {
     resp.set_code(RedisResponsePB_RedisStatusCode_SERVER_ERROR);
     auto error_message =
@@ -1060,6 +1065,7 @@ void HandleAuth(LocalCommandData data) {
                      : strings::Substitute("ERR: Bad Password. $0", status.ToString()));
     resp.set_error_message(error_message);
   } else {
+    // 验证成功
     RedisConnectionContext& context = data.call()->connection_context();
     context.set_authenticated(true);
     resp.set_code(RedisResponsePB::OK);
@@ -1209,6 +1215,7 @@ void HandleDeleteDB(LocalCommandData data) {
 
 void HandleSelect(LocalCommandData data) {
   RedisResponsePB resp;
+  // 拿到第二个参数
   const string db_name = data.arg(1).ToBuffer();
   RedisServiceData* sd = data.context()->service_data();
   auto s = sd->GetYBTableForDB(db_name);

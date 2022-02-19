@@ -1847,6 +1847,7 @@ void YBClient::LookupTabletByKey(const std::shared_ptr<YBTable>& table,
                                  const std::string& partition_key,
                                  CoarseTimePoint deadline,
                                  LookupTabletCallback callback) {
+  // 
   data_->meta_cache_->LookupTabletByKey(table, partition_key, deadline, std::move(callback));
 }
 
@@ -1998,7 +1999,9 @@ Result<bool> YBClient::TableExists(const YBTableName& table_name) {
 Status YBClient::OpenTable(const YBTableName& table_name, YBTablePtr* table) {
   YBTableInfo info;
   auto deadline = CoarseMonoClock::Now() + default_admin_operation_timeout();
+  // 发起一个GetTableSchemaRpc，根据table_name的搭配schema相关信息，这里是同步的
   RETURN_NOT_OK(data_->GetTableSchema(this, table_name, deadline, &info));
+  // 用获取到的table_id去获取partition相关的信息，隐含着调用GetTableLocationsRpc
   auto future = FetchPartitionsFuture(this, info.table_id);
   // In the future, probably will look up the table in some map to reuse YBTable instances.
   *table = std::make_shared<YBTable>(info, VERIFY_RESULT(future.get()));
@@ -2008,6 +2011,7 @@ Status YBClient::OpenTable(const YBTableName& table_name, YBTablePtr* table) {
 Status YBClient::OpenTable(
     const TableId& table_id, YBTablePtr* table, master::GetTableSchemaResponsePB* resp) {
   // Fetch partitions first to run GetTableSchema and GetTableLocations RPCs in parallel.
+  // 这里并行的操作还挺6的
   auto future = FetchPartitionsFuture(this, table_id);
 
   YBTableInfo info;

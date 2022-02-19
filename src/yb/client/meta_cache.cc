@@ -1749,8 +1749,15 @@ void MetaCache::LookupByIdFailed(
   }
 }
 
+/*
+ * 1. tables_中直接使用table_id查找，为空返回
+ * 2. cache的version落后的话返回空
+ * 3. 所查找的partition_key超过有效区间时错误
+ * 4. remoteptr落后的话也返回空
+ * */
 RemoteTabletPtr MetaCache::LookupTabletByKeyFastPathUnlocked(
     const TableId& table_id, const VersionedPartitionStartKey& versioned_partition_start_key) {
+  // tables_是一个table_id和tabledata对应的映射
   auto it = tables_.find(table_id);
   if (PREDICT_FALSE(it == tables_.end())) {
     // No cache available for this table.
@@ -1764,6 +1771,7 @@ RemoteTabletPtr MetaCache::LookupTabletByKeyFastPathUnlocked(
           versioned_partition_start_key.partition_list_version)) {
     // TableData::partition_list version in cache does not match partition_list_version used to
     // calculate partition_key_start, can't use cache.
+    // 已经分裂过，cache过期
     return nullptr;
   }
 
@@ -1820,7 +1828,9 @@ boost::optional<std::vector<RemoteTabletPtr>> MetaCache::FastLookupAllTabletsUnl
 RemoteTabletPtr MetaCache::FastLookupTabletByKeyUnlocked(
     const TableId& table_id, const VersionedPartitionStartKey& partition_start) {
   // Fast path: lookup in the cache.
+  // 在本地cache查找对应table_id
   auto result = LookupTabletByKeyFastPathUnlocked(table_id, partition_start);
+  // 这里的Hasleader是判断服务是否下线
   if (result && result->HasLeader()) {
     VLOG_WITH_PREFIX(5) << "Fast lookup: found tablet " << result->tablet_id();
     return result;
@@ -1842,6 +1852,7 @@ bool IsUniqueLock(const SharedLock<Mutex>*) {
 // partition_group_start should be not nullptr and points to PartitionGroupStartKeyPtr that will be
 // initialized only if it is nullptr. This is an optimization to avoid recalculation of
 // partition_group_start in subsequent call of this function (see MetaCache::LookupTabletByKey).
+// 除了缓存以外还可能调用LookupByKeyRpc
 template <class Lock>
 bool MetaCache::DoLookupTabletByKey(
     const std::shared_ptr<const YBTable>& table, const VersionedTablePartitionListPtr& partitions,
@@ -1858,22 +1869,27 @@ bool MetaCache::DoLookupTabletByKey(
   {
     Lock lock(mutex_);
     tablet = FastLookupTabletByKeyUnlocked(table->id(), {partition_start, partitions->version});
+    // Cache中存在数据且有效，这里也是为什么需要第一遍加共享锁的原因，为了获取的更高效
     if (tablet) {
       return true;
     }
-
+    // 问题在于第一次进入这个函数时缓存不存在和版本不对时会怎么做，答案是都会通过IsUniqueLock退出
     auto table_it = tables_.find(table->id());
     TableData* table_data;
+    // cache为空的时候，就在tables_里面放入一个数据项，尽管里面什么也没有
     if (table_it == tables_.end()) {
       VLOG_WITH_PREFIX_AND_FUNC(4) << Format(
           "missed table_id $0", table->id());
+          // 发现时共享锁在这里退出
       if (!IsUniqueLock(&lock)) {
         return false;
       }
+      // 关键在于这里，没有cache的时候如何构造
       table_it = InitTableDataUnlocked(table->id(), partitions);
     }
     table_data = &table_it->second;
 
+    // partition版本不一致的时候
     if (table_data->partition_list->version != partitions->version ||
         (PREDICT_FALSE(RandomActWithProbability(
             FLAGS_TEST_simulate_lookup_partition_list_mismatch_probability)) &&
@@ -1888,6 +1904,7 @@ bool MetaCache::DoLookupTabletByKey(
       return true;
     }
 
+    // 这里为空的时候需要构造下
     if (!*partition_group_start) {
       *partition_group_start = client::FindPartitionStart(
           partitions, *partition_start, kPartitionGroupSize);
@@ -1896,16 +1913,19 @@ bool MetaCache::DoLookupTabletByKey(
     auto& tablet_lookups_by_group = table_data->tablet_lookups_by_group;
     LookupDataGroup* lookups_group;
     {
+      // 查找对应partition_key的LookDataGroup
       auto lookups_group_it = tablet_lookups_by_group.find(**partition_group_start);
       if (lookups_group_it == tablet_lookups_by_group.end()) {
         if (!IsUniqueLock(&lock)) {
           return false;
         }
+        // 都已经没找到了，这里是为啥，为了构造一个新结构吗？
         lookups_group = &tablet_lookups_by_group[**partition_group_start];
       } else {
         lookups_group = &lookups_group_it->second;
       }
     }
+    // 插入一个新的请求
     lookups_group->lookups.Push(new LookupData(*callback, deadline, partition_start));
     request_no = lookup_serial_.fetch_add(1, std::memory_order_acq_rel);
     int64_t expected = 0;
@@ -1919,7 +1939,7 @@ bool MetaCache::DoLookupTabletByKey(
       return true;
     }
   }
-
+  // 因为上面自旋的操作，这里实际只执行一次
   auto rpc = std::make_shared<LookupByKeyRpc>(
       this, table, VersionedPartitionGroupStartKey{*partition_group_start, partitions->version},
       request_no, deadline);
@@ -1982,6 +2002,7 @@ void MetaCache::LookupTabletByKey(const std::shared_ptr<YBTable>& table,
                                   const PartitionKey& partition_key,
                                   CoarseTimePoint deadline,
                                   LookupTabletCallback callback) {
+  // 是一个分裂相关的处理，还是挺复杂的，暂时不碰
   if (table->ArePartitionsStale()) {
     table->RefreshPartitions(client_, [this, table, partition_key, deadline,
                               callback = std::move(callback)](const Status& status) {
@@ -1995,14 +2016,19 @@ void MetaCache::LookupTabletByKey(const std::shared_ptr<YBTable>& table,
     return;
   }
 
+  // 获取table的partition列表
   const auto table_partition_list = table->GetVersionedPartitions();
+  // 查看此操作的partitionkey所处的区间的start是哪里
   const auto partition_start = client::FindPartitionStart(table_partition_list, partition_key);
   VLOG_WITH_PREFIX_AND_FUNC(5) << "Table: " << table->ToString()
-                    << ", partition_list_version: " << table_partition_list->version
+                    << ", partition_list_version: " << table_partition_list->version  // 应该可以视为分裂的版本
                     << ", partition_key: " << Slice(partition_key).ToDebugHexString()
                     << ", partition_start: " << Slice(*partition_start).ToDebugHexString();
 
   PartitionGroupStartKeyPtr partition_group_start;
+  //当元缓存没有分区查找请求的条目时，将获取 2 个锁。 最初它将获取共享锁，检查缓存，然后获取唯一锁并将回调添加到等待列表。
+  // 首先第一次带着共享锁检查缓存，如果找到直接退出，如果找不到的话重新获取
+  // 感觉像是去拿partition_key对应的remote_tablet信息
   if (DoLookupTabletByKey<SharedLock<std::shared_timed_mutex>>(
           table, table_partition_list, partition_start, deadline, &callback,
           &partition_group_start)) {
